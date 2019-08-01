@@ -38,12 +38,12 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-XXH64_hash_t my_hash_64(const void* data, uint32_t l){
+XXH64_hash_t FastHash64(const void* data, uint32_t l){
   size_t len = l;
   return XXH3_64bits(data, len);
 }
 
-XXH128_hash_t my_hash_128(const void* data, uint32_t l){
+XXH128_hash_t FastHash128(const void* data, uint32_t l){
   size_t len = l;
   return XXH3_128bits(data, len);
 }
@@ -92,7 +92,7 @@ typedef struct{                // hash context
 // pgsz       : size in bytes of new data page buffer
 // return pointer to new saved data page
 // NULL is returned if an error occurs
-data_save *data_newpage(data_save *old_page, uint32_t pgsz){ 
+static data_save *data_newpage(data_save *old_page, uint32_t pgsz){ 
   data_save *temp;
 
   temp = (data_save *)malloc( sizeof(data_save) + pgsz );  // try to allocate new saved data page of size pgsz
@@ -111,7 +111,7 @@ data_save *data_newpage(data_save *old_page, uint32_t pgsz){
 // sz         : size of data
 // return pointer to (possibbly new) data page
 // NULL is returned if an error occurs
-data_save *data_copy(data_save *old_page, void *data, uint32_t sz){  
+static data_save *data_copy(data_save *old_page, void *data, uint32_t sz){  
   data_save *temp = old_page;
   uint32_t newpgsz;
 
@@ -131,7 +131,7 @@ data_save *data_copy(data_save *old_page, void *data, uint32_t sz){
 
 // create a new empty hash table page
 // return pointer ot initialized new page, NULL if an error occurred
-hash_page *hash_newpage(){   
+static hash_page *hash_newpage(){   
   hash_page *temp = (hash_page *) malloc(sizeof(hash_page));
   if(temp != NULL){
     temp->next = NULL;
@@ -142,7 +142,7 @@ hash_page *hash_newpage(){
 }
 
 // return pointer to a new hash entry, NULL if error
-hash_entry *new_hash_entry(hash_context *c){
+static hash_entry *new_hash_entry(hash_context *c){
   hash_page *p;
   hash_entry *e = NULL;
 
@@ -163,7 +163,7 @@ hash_entry *new_hash_entry(hash_context *c){
 // create a hash context
 // n    : number of items expected in hash table
 // return pointer to hash context , NULL if an error occurred
-hash_context *create_hash_context(int32_t n){
+hash_context *CreateHashContext(int32_t n){
   int i = 1;
 
   if(n < 0) return NULL;
@@ -187,7 +187,7 @@ hash_context *create_hash_context(int32_t n){
   return temp;
 }
 
-int32_t is_same_key(uint8_t *s1, uint8_t *s2, int32_t len){
+static int32_t is_same_key(uint8_t *s1, uint8_t *s2, int32_t len){
   int i;
   uint8_t *k1 = (uint8_t *) s1;
   uint8_t *k2 = (uint8_t *) s2;
@@ -209,7 +209,7 @@ int32_t is_same_key(uint8_t *s1, uint8_t *s2, int32_t len){
 // return 0 if new entry
 // return index in table if entry exists
 // return -1 if an error occurred
-int32_t hash_insert(hash_context *c, void *key, uint32_t keylen, void *data, uint32_t datalen, uint32_t keycopy){
+int32_t HashInsert(hash_context *c, void *key, uint32_t keylen, void *data, uint32_t datalen, uint32_t keycopy){
   uint64_t hash, tmp0, tmp1;
   uint64_t nb = 64;
   hash_entry *e = NULL;
@@ -217,7 +217,7 @@ int32_t hash_insert(hash_context *c, void *key, uint32_t keylen, void *data, uin
 
   if(keylen < 0 || datalen <0 || key == NULL || c == NULL) return -1; // ERROR
 
-  hash = my_hash_64(key, keylen);  // make hash and convert ot index into table
+  hash = FastHash64(key, keylen);  // make hash and convert ot index into table
   tmp0 = hash;
   tmp1 = tmp0 & c->mask;
   while(nb > c->nbits) {           // convert 64 bit hash into index into table
@@ -248,6 +248,8 @@ int32_t hash_insert(hash_context *c, void *key, uint32_t keylen, void *data, uin
   return 0;
 }
 
+#if defined (SELF_TEST)
+
 static inline uint64_t rdtsc()  // get tsc/socket/processor
 {
    unsigned int a, d, c;
@@ -260,7 +262,6 @@ static inline uint64_t rdtsc()  // get tsc/socket/processor
 }
 
 static char *str="The canonical representation will solve the issue of identical byte-level representation";
-
 int main(){
   int i, j;
   XXH64_hash_t the_sum;
@@ -269,10 +270,11 @@ int main(){
   the_sum = 0;
   for(i=32 ; i<128 ; i++){
     t0 = rdtsc();
-      for(j=0 ; j<100 ; j++) { the_sum += my_hash_64(str+j,10); }
+      for(j=0 ; j<100 ; j++) { the_sum += FastHash64(str+j,10); }
     t1 = rdtsc();
     printf("%5d %Lu \n",i,(unsigned long long)((t1-t0)/100));
   }
   printf("%Lu\n",(unsigned long long)the_sum);
   return 0;
 }
+#endif
