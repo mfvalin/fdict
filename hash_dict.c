@@ -48,6 +48,7 @@ XXH128_hash_t FastHash128(const void* data, uint32_t l){
   return XXH3_128bits(data, len);
 }
 
+#define DEFAULT_DATA_PAGE 32768
 struct data_save{              // saved data page
   struct data_save *next;      // pointer to next page
   uint8_t *last;               // pointer to last data inserted
@@ -58,10 +59,10 @@ struct data_save{              // saved data page
 typedef struct data_save data_save;
 
 struct hash_entry{             // hash table entry
+  uint64_t hash;               // 64 bit hash of key
   void *key;                   // pointer to key
   void *data;                  // pointer to data
   struct hash_entry *next;     // link to next hash entry for a key with same hash (bucket hash)
-  uint64_t hash;               // 64 bit hash of key
   uint32_t keylen;             // length (in bytes) of key
   uint32_t datalen;            // length (in bytes) of data
 };
@@ -76,14 +77,19 @@ struct hash_page{              // hash table page
 };
 typedef struct hash_page hash_page;
 
+// N.B. the number of uint32_t at beginning of struct should be EVEN for alignment purposes on 64 bit platforms
 typedef struct{                // hash context
-  data_save *keys;             // pointer to saved keys (may be NULL)
-  hash_page *first;            // first hash page in chain
-  hash_page *cur;              // current hash page being filled
   uint32_t tsize;              // max number of entries expected in array p
   uint32_t hashtype;           // hash algorithm used (1 for now)
   uint32_t mask;               // mask used to convert hash into index into array p
   uint32_t nbits;              // shift count used to convert hash into index into array p
+  uint32_t ncoll;              // number of collisions
+  uint32_t nentr;              // number of entries in table
+  uint32_t depth;              // max depth of collision bucket
+  uint32_t match;              // number of successful matches
+  data_save *keys;             // pointer to saved keys (may be NULL)
+  hash_page *first;            // first hash page in chain
+  hash_page *cur;              // current hash page being filled
   hash_entry *p[0];            // table of pointers to hash entries (size = tsize)
 }hash_context;
 
@@ -96,6 +102,7 @@ static data_save *data_newpage(data_save *old_page, uint32_t pgsz){
   data_save *temp;
 
   temp = (data_save *)malloc( sizeof(data_save) + pgsz );  // try to allocate new saved data page of size pgsz
+  if(DEBUG > 0) printf("new data page allocated, len = %d\n",pgsz);
   if(temp != NULL){
     temp->last = NULL;                // no last entry
     temp->end = &(temp->data[pgsz]);  // page size
@@ -115,11 +122,13 @@ static data_save *data_copy(data_save *old_page, void *data, uint32_t sz){
   data_save *temp = old_page;
   uint32_t newpgsz;
 
+  if(DEBUG > 0) printf("data_copy: copying %d bytes\n",sz);
   if(temp == NULL) return temp;     // ERROR
   newpgsz = old_page->end - &(old_page->data[0]); // new page size = old page size by default
   if(newpgsz < sz) newpgsz = sz;                  // new page size must be large enough to contain at least sz bytes
 
-  if(old_page->cur + sz > old_page->last){       // data will not fit into current data page
+  if(old_page->cur + sz > old_page->end){       // data will not fit into current data page
+  if(DEBUG > 0) printf("NO FIT, need new page\n");
     temp = data_newpage(old_page, newpgsz);       // allocate a new data page
     if(temp == NULL) return NULL;                 // ERROR
   }
@@ -167,7 +176,8 @@ hash_context *CreateHashContext(int32_t n){
   int i = 1;
 
   if(n < 0) return NULL;
-  hash_context *temp = (hash_context *) malloc(sizeof(hash_context) + n * sizeof(void *));
+  while( (1 << i) < n ) i++;     // 1 << i is first power of 2 larger than n
+  hash_context *temp = (hash_context *) malloc(sizeof(hash_context) + (1 << i) * sizeof(void *));
 
   if(temp == NULL) return NULL;  // allocation failed
 
@@ -181,8 +191,11 @@ hash_context *CreateHashContext(int32_t n){
   temp->cur   = temp->first;     // current page is first page
   temp->tsize = n;               // dictionary size
   temp->hashtype = 1;            // only value for now (xxhash type)
-  while( (1 << i) < n ) i++;
-  temp->nbits = i;              // first power of 2 larger than n
+  temp->nbits = i;               // first power of 2 larger than n
+  temp->ncoll = 0;               // no collisions so far !!
+  temp->nentr = 0;               // no entries in table
+  temp->depth = 0;               // max depth of collision bucket
+  temp->match = 0;               // number of successful matches
   temp->mask = ~((-1) << temp->nbits);  // mask associated with nbits
   return temp;
 }
@@ -214,6 +227,7 @@ int32_t HashInsert(hash_context *c, void *key, uint32_t keylen, void *data, uint
   uint64_t nb = 64;
   hash_entry *e = NULL;
   data_save *old_page;
+  uint32_t depth = 1;   // collision bucket depth
 
   if(keylen < 0 || datalen <0 || key == NULL || c == NULL) return -1; // ERROR
 
@@ -226,26 +240,51 @@ int32_t HashInsert(hash_context *c, void *key, uint32_t keylen, void *data, uint
     tmp1 ^= (tmp0 & c->mask);
   }
   e = c->p[tmp1];
+  if(e != NULL) c->ncoll++;  // we have a collision
   while(e != NULL){          // entry may exist
+  if(DEBUG > 0) printf("index collision\n");
     if(e->hash == hash && e->keylen == keylen){     // possible match
-      if( is_same_key(key, e->key, keylen) ) return tmp1 ;   // match found
+      if( is_same_key(key, e->key, keylen) ) {
+        c->ncoll--;     // not a collision after all
+        c->match++;     // match count
+  if(DEBUG > 0) printf("match found\n");
+        return tmp1 ;   // match found
+      }
     }
+    depth++;      // collision bucket depth
     e = e->next;  // try next for match until NULL
   }
+  if(depth > c->depth) c->depth = depth;  // keep track of maximum collision bucket depth
   e = new_hash_entry(c); // entry does not exist, insert at position tmp1
+  c->nentr++;            // one more entry in table
   e -> key = key;
   e->keylen = keylen;
   e->data = data;
   e->datalen = datalen;
   e->hash = hash;
   if(keycopy){
+  if(DEBUG > 0) printf("copying key '%s', len = %d\n",(char *)key, keylen);
     old_page = c->keys;
-    c->keys = data_copy(old_page, data, datalen);   // old_page or address of new page 
+    if(old_page == NULL) old_page = data_newpage(NULL, keylen < DEFAULT_DATA_PAGE ? DEFAULT_DATA_PAGE : keylen);
+    c->keys = data_copy(old_page, key, keylen);   // old_page or address of new page 
     e->key = c->keys->last;
   }
   e->next = c->p[tmp1];
   c->p[tmp1] = e;
   return 0;
+}
+
+// dump context statistics
+void PrintHashContextStats(hash_context *c, char *header){
+  printf("===== %s ===== (Hash Context)\n",header);
+  printf("hash table size      = %d (%d)\n", 1<<c->nbits,c->tsize);
+  printf("number of entries    = %d\n",c->nentr);
+  printf("number of collisions = %d\n",c->ncoll);
+  printf("number of duplicates = %d\n",c->match);
+  printf("max collision bucket = %d\n",c->depth);
+  printf("key copy             = %s\n",c->keys?"YES":"NO");
+  printf("index mask           = %8.8x\n",c->mask);
+  printf("==============================\n");
 }
 
 #if defined (SELF_TEST)

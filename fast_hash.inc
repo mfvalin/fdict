@@ -16,4 +16,9 @@ interface
     integer(C_INT32_T), intent(IN), value :: n
     type(C_PTR) :: context
   end function create_hash_context
+  subroutine print_hash_context_stats(context, header) bind(C,name='PrintHashContextStats')
+    import :: C_PTR, C_CHAR
+    type(C_PTR), intent(IN), value :: context
+    character(C_CHAR), dimension(*) :: header
+  end subroutine print_hash_context_stats
 end interface
