@@ -5,6 +5,13 @@ interface
     integer(C_INT32_T), intent(IN), value :: l
     integer(C_INT64_T) :: hash
   end function FastHash64
+  function hash_lookup(c, key, keylen, datalen) result(data) bind(C,name='HashLookup')
+    import :: C_PTR, C_INT32_T
+    type(C_PTR), intent(IN), value :: c, key
+    integer(C_INT32_T), intent(IN), value :: keylen
+    integer(C_INT32_T), intent(OUT) :: datalen
+    type(C_PTR) :: data
+  end function hash_lookup
   function hash_insert(c, key, keylen, data, datalen, keycopy) result(status) bind(C,name='HashInsert')
     import :: C_PTR, C_INT32_T
     type(C_PTR), intent(IN), value :: c, key, data

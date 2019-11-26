@@ -216,6 +216,48 @@ static int32_t is_same_key(uint8_t *s1, uint8_t *s2, int32_t len){
   return 1;
 }
 
+// look for key in hash table
+// c         : pointer to hash context created by create_hash_context
+// key       : pointer to key
+// keylen    : length of key (in bytes)
+// return pointer to data if found, NULL otherwise
+// datalen   : will be set to data length (0 if not found, -1 if error)
+void *HashLookup(hash_context *c, void *key, uint32_t keylen, int32_t *datalen){
+  uint64_t hash, tmp0, tmp1;
+  uint64_t nb = 64;
+  hash_entry *e = NULL;
+
+  if(keylen < 0 || key == NULL || c == NULL) { // ERROR
+    *datalen = -1;
+    return NULL;
+  }
+
+  *datalen = 0;                    // in case key is not found
+  hash = FastHash64(key, keylen);  // make hash and convert ot index into table
+  tmp0 = hash;
+  tmp1 = tmp0 & c->mask;
+  while(nb > c->nbits) {           // convert 64 bit hash into index into table
+    nb = nb - c->nbits;
+    tmp0 >>= c->nbits;
+    tmp1 ^= (tmp0 & c->mask);
+  }
+  e = c->p[tmp1];
+  if(e == NULL) return NULL;  // key not found
+
+  while(e != NULL){           // entry may exist
+    if(e->hash == hash && e->keylen == keylen){     // possible match (hash and keylen are the same)
+      if( is_same_key(key, e->key, keylen) ) {      // match found
+        c->match++;     // match count
+        *datalen = e->datalen ;        // length of data
+        return e->data ;               // address of data
+      }
+    }
+    e = e->next;  // try next for match until NULL
+  }
+
+  return NULL;  // key not found
+}
+
 // insert pointers to key and data into hash table (if entry does not already exists)
 // c         : pointer to hash context created by create_hash_context
 // key       : pointer to key
@@ -306,7 +348,7 @@ static inline uint64_t rdtsc()  // get tsc/socket/processor
    return ((uint64_t)a) | (((uint64_t)d) << 32);;
 }
 
-static char *str="The canonical representation will solve the issue of identical byte-level representation";
+static char *str="The canonical representation will solve the issue of identical byte-level representationThe canonical representation will solve the issue of identical byte-level representation";
 int main(){
   int i, j;
   XXH64_hash_t the_sum;

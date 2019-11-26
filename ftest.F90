@@ -7,9 +7,11 @@ program test
   integer(C_INT32_T) :: status
   integer(C_INT64_T) :: hash
   character(len=32), target :: str
-  integer, dimension(128), target :: data
+  integer, dimension(32768), target :: data
   integer :: iun, nlines
   character(len=128), target :: line
+  type(C_PTR) :: dataptr
+  integer(C_INT32_T) :: datalen
 
   context = create_hash_context(512000)
   call print_hash_context_stats(context, "Blah Blah Blah"//achar(0))
@@ -22,10 +24,32 @@ program test
   nlines = nlines+1
   if(nlines > 500000) goto 2
   str = trim(line)//achar(0)
-  status = hash_insert(context, C_LOC(str(1:1)), len(trim(line)), C_LOC(data(1)), 512, 1)
+  datalen = mod(nlines, 512) + 100
+  dataptr = C_LOC(data(1+mod(nlines, 512)))
+  status = hash_insert(context, C_LOC(str(1:1)), len(trim(line)), dataptr, datalen, 1)
   goto 1
 2 continue
-  print *,'lines read =',nlines
+  close(100)
+  print *,'lines read    =',nlines
+
+  nlines = 0
+  open(100,file='test_keys.txt',FORM='FORMATTED')
+3 continue
+  read(100,'(A128)',end=4,err=4) line
+  nlines = nlines+1
+  if(nlines > 500000) goto 4
+  str = trim(line)//achar(0)
+  dataptr = hash_lookup(context, C_LOC(str(1:1)), len(trim(line)), datalen)
+  ! check that dataptr points to data buffer
+  ! and that data length is OK
+  if( (.not. C_ASSOCIATED(dataptr,C_LOC(data(1+mod(nlines, 512))))) .or. (datalen .ne. mod(nlines, 512) + 100) ) then
+    print *,'ERROR: lookup of known key failed for '//trim(line)
+    goto 4
+  endif
+  goto 3
+4 continue
+  close(100)
+  print *,'lines checked =',nlines
 
   call print_hash_context_stats(context, "Blah Blah Blah"//achar(0))
   stop
